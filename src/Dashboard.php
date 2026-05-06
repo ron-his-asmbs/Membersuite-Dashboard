@@ -1,41 +1,72 @@
 <?php
+
 namespace ASMBS\Dashboard;
 
 class Dashboard
 {
-    public function __construct()
-    {
-        add_filter('template_include', [$this, 'loadData'], 1);
-    }
+	public function __construct()
+	{
+		add_filter('template_include', [$this, 'loadData'], 1);
+	}
 
-    public function loadData(string $template): string
-    {
-        if (!is_page_template('page-templates/member-dashboard.php')) {
-            return $template;
-        }
+	public function loadData(string $template): string
+	{
+		if (!is_page_template('page-templates/member-dashboard.php')) {
+			return $template;
+		}
 
-        $wp_user  = wp_get_current_user();
-        $mem_guid = get_user_meta($wp_user->ID, 'mem_guid', true);
-        $member_id = get_user_meta($wp_user->ID, 'mem_key', true);
+		$wp_user  = wp_get_current_user();
+		$mem_guid  = get_user_meta($wp_user->ID, 'mem_guid', true);
+		$member_id = get_user_meta($wp_user->ID, 'mem_key', true);
 
-        if (!$mem_guid) {
-            set_query_var('ms_error', 'No MemberSuite GUID found for this account.');
-            return $template;
-        }
+		// If no GUID but we have a localID, look it up from MemberSuite
+		if (empty($mem_guid) && !empty($member_id)) {
+			$mem_guid = $this->lookupGuidByLocalId($member_id);
+			if ($mem_guid) {
+				update_user_meta($wp_user->ID, 'mem_guid', $mem_guid);
+				error_log('Dashboard: backfilled mem_guid for user ' . $wp_user->ID);
+			}
+		}
 
-        $memberData = new MemberData($mem_guid);
+		$memberData = new MemberData($mem_guid);
 
-        if (!$memberData->fetch()) {
-            set_query_var('ms_error', 'Unable to load member profile from MemberSuite.');
-            return $template;
-        }
+		if (!$memberData->fetch()) {
+			set_query_var('ms_error', 'Unable to load member profile from MemberSuite.');
+			return $template;
+		}
 
-        // Make data available to the template
-        set_query_var('ms_member',      $memberData);
-        set_query_var('ms_member_id',   $member_id);
-        set_query_var('ms_type_code',   get_user_meta($wp_user->ID, 'mem_type', true));
-        set_query_var('ms_status_code', get_user_meta($wp_user->ID, 'mem_status', true));
+		// Make data available to the template
+		set_query_var('ms_member', $memberData);
+		set_query_var('ms_member_id', $member_id);
+		set_query_var('ms_type_code', get_user_meta($wp_user->ID, 'mem_type', true));
+		set_query_var('ms_status_code', get_user_meta($wp_user->ID, 'mem_status', true));
 
-        return $template;
-    }
+		return $template;
+	}
+
+	private function lookupGuidByLocalId(string $localId): string
+	{
+		$token    = TokenService::getToken();
+		$response = wp_remote_post(
+			'https://rest.membersuite.com/platform/v2/dataSuite/executeSearch',
+			[
+				'headers' => [
+					'Accept'        => 'application/json',
+					'Authorization' => 'Bearer ' . $token,
+					'Content-Type'  => 'application/json',
+				],
+				'body'    => json_encode([
+					'msql' => "SELECT TOP 1 ID FROM Individual WHERE LocalID = '{$localId}'"
+				]),
+				'timeout' => 15,
+			]
+		);
+
+		if (is_wp_error($response) || wp_remote_retrieve_response_code($response) !== 200) {
+			return '';
+		}
+
+		$data = json_decode(wp_remote_retrieve_body($response), true);
+		return $data['data'][0]['id'] ?? '';
+	}
 }

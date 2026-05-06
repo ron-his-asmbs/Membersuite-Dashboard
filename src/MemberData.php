@@ -3,6 +3,14 @@ namespace ASMBS\Dashboard;
 
 class MemberData
 {
+	private ?array $data = null;
+	private string $guid; // ← add this
+
+	public function __construct(string $guid)
+	{
+		$this->guid = $guid;
+	}
+
     public function fetch(): bool
     {
         $token = TokenService::getToken();
@@ -69,6 +77,11 @@ class MemberData
             $this->get('emailAddress3'),
         ]);
     }
+
+	public function getPracticeSetting(): array
+	{
+		return $this->get('practiceSetting__c', []);
+	}
 
     public function getSocialLinks(): array
     {
